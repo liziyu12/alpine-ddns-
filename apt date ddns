@@ -1,0 +1,38 @@
+#!/bin/sh
+
+# 从环境变量中读取配置信息
+CF_API_TOKEN="${CF_API_TOKEN}"
+CF_ZONE_ID="${CF_ZONE_ID}"
+CF_RECORD_ID="${CF_RECORD_ID}"
+HOSTNAME="${HOSTNAME}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID}"
+
+# 定义日志文件路径
+LOG_FILE="/var/log/ddns_update.log"
+
+# 获取当前 IP 地址
+CURRENT_IP=$(curl -s http://ipinfo.io/ip)
+
+# 更新 DDNS
+RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$CF_RECORD_ID" \
+     -H "Authorization: Bearer $CF_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data "{\"type\":\"A\",\"name\":\"$HOSTNAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120}")
+
+# 检查更新结果
+if echo "$RESPONSE" | grep -q "\"success\":true"; then
+    echo "$(date): DDNS 更新成功，当前 IP 地址是 $CURRENT_IP." >> $LOG_FILE
+
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新成功，当前 IP 地址是 $CURRENT_IP，时间：$(date)。"
+else
+    echo "$(date): DDNS 更新失败: $RESPONSE" >> $LOG_FILE
+
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新失败: $RESPONSE，时间：$(date)。"
+fi
