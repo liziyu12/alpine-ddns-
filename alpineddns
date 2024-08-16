@@ -1,47 +1,336 @@
 #!/bin/sh
 
-# 提示用户输入必要信息
-echo "请输入你的 Cloudflare API token:"
-read CF_API_TOKEN
+# 脚本路径和配置文件
+CONFIG_FILE="/etc/ddns_config.conf"
+SCRIPT_PATH="/usr/local/bin/ddns_update.sh"
+MANAGE_SCRIPT_PATH="/usr/local/bin/ddns"
+LOG_FILE="/var/log/ddns_update.log"
 
-echo "请输入你的 Cloudflare zone ID:"
-read CF_ZONE_ID
+# 打印菜单
+print_menu() {
+    echo "作者: liziyu"
+    echo "请选择操作:"
+    echo "1. 配置 DDNS"
+    echo "2. 重启 DDNS 更新脚本"
+    echo "3. 重新配置需要解析的域名"
+    echo "4. 重新配置 Telegram 通知"
+    echo "5. 卸载 DDNS"
+    echo "6. 退出脚本"
+}
 
-echo "请输入你的 Cloudflare record ID:"
-read CF_RECORD_ID
+# 配置信息
+configure_ddns() {
+    echo "请输入您的 Cloudflare API token:"
+    read CF_API_TOKEN
 
-echo "请输入你想更新的主机名:"
-read HOSTNAME
+    echo "请输入您的 Cloudflare 邮箱:"
+    read CF_EMAIL
 
-echo "请输入你的 Telegram 机器人 token:"
-read TELEGRAM_BOT_TOKEN
+    echo "请输入要解析的域名 (例如 example.com):"
+    read HOSTNAME
 
-echo "请输入你的 Telegram 聊天 ID:"
-read TELEGRAM_CHAT_ID
+    echo "请输入您的 Telegram 机器人 token:"
+    read TELEGRAM_BOT_TOKEN
 
-echo "请输入 DDNS 更新的时间间隔（分钟）："
-read UPDATE_INTERVAL
+    echo "请输入您的 Telegram chat ID:"
+    read TELEGRAM_CHAT_ID
 
-# 远程 DDNS 脚本的 URL
-REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/liziyu12/alpine-ddns-/main/alpineddns"
+    # 创建配置文件
+    echo "CF_API_TOKEN=\"$CF_API_TOKEN\"" > "$CONFIG_FILE"
+    echo "CF_EMAIL=\"$CF_EMAIL\"" >> "$CONFIG_FILE"
+    echo "HOSTNAME=\"$HOSTNAME\"" >> "$CONFIG_FILE"
+    echo "TELEGRAM_BOT_TOKEN=\"$TELEGRAM_BOT_TOKEN\"" >> "$CONFIG_FILE"
+    echo "TELEGRAM_CHAT_ID=\"$TELEGRAM_CHAT_ID\"" >> "$CONFIG_FILE"
 
-# 下载并执行远程 DDNS 脚本
-echo "正在下载并执行远程 DDNS 脚本..."
-bash <(wget -qO- "$REMOTE_SCRIPT_URL")
+    # 创建 DDNS 更新脚本
+    echo "创建 DDNS 更新脚本..."
+    sudo tee $SCRIPT_PATH > /dev/null <<EOF
+#!/bin/sh
 
-# 配置远程脚本所需的信息
-echo "正在使用提供的信息配置远程脚本..."
+# 配置部分
+CF_API_TOKEN="$CF_API_TOKEN"
+CF_EMAIL="$CF_EMAIL"
+HOSTNAME="$HOSTNAME"
+TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
 
-# 设置环境变量以供远程脚本使用
-export CF_API_TOKEN
-export CF_ZONE_ID
-export CF_RECORD_ID
-export HOSTNAME
-export TELEGRAM_BOT_TOKEN
-export TELEGRAM_CHAT_ID
+# 获取当前 IP 地址
+CURRENT_IP=\$(curl -s http://ipinfo.io/ip)
 
-# 设置定时任务，按照指定的时间间隔执行远程 DDNS 脚本
-echo "正在设置 Cron 任务以每 $UPDATE_INTERVAL 分钟运行一次远程 DDNS 脚本..."
-(crontab -l 2>/dev/null; echo "*/$UPDATE_INTERVAL * * * * bash <(wget -qO- $REMOTE_SCRIPT_URL)") | crontab -
+# 获取 Zone ID 和 Record ID
+ZONE_ID=\$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=\$HOSTNAME" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" | jq -r '.result[0].id')
 
-echo "设置完成！"
+RECORD_ID=\$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records?type=A&name=\$HOSTNAME" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+# 更新 DDNS
+RESPONSE=\$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records/\$RECORD_ID" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data "{\"type\":\"A\",\"name\":\"\$HOSTNAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":120}")
+
+# 检查更新结果
+if echo "\$RESPONSE" | grep -q "\"success\":true"; then
+    echo "\$(date): DDNS 更新成功，IP 地址为 \$CURRENT_IP。" >> $LOG_FILE
+    
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="\$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新成功，IP 地址为 \$CURRENT_IP，时间：\$(date)。"
+else
+    echo "\$(date): DDNS 更新失败: \$RESPONSE" >> $LOG_FILE
+
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="\$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新失败: \$RESPONSE，时间：\$(date)。"
+fi
+EOF
+
+    # 设置脚本执行权限
+    sudo chmod +x $SCRIPT_PATH
+
+    # 设置定时任务
+    echo "*/5 * * * * $SCRIPT_PATH" | (crontab -l; cat) | crontab -
+
+    echo "DDNS 更新脚本已成功配置和启动！"
+}
+
+# 重启 DDNS 脚本
+restart_ddns() {
+    echo "重启 DDNS 更新脚本..."
+    (crontab -l | grep -v "$SCRIPT_PATH") | crontab -
+    echo "*/5 * * * * $SCRIPT_PATH" | (crontab -l; cat) | crontab -
+    echo "DDNS 更新脚本已重启。"
+}
+
+# 重新配置域名
+reconfigure_hostname() {
+    echo "请输入新的要解析的域名 (例如 example.com):"
+    read HOSTNAME
+
+    # 更新配置文件
+    sed -i "s/^HOSTNAME=.*/HOSTNAME=\"$HOSTNAME\"/" "$CONFIG_FILE"
+
+    echo "域名已重新配置为 $HOSTNAME。"
+}
+
+# 重新配置 Telegram 通知
+reconfigure_telegram() {
+    echo "请输入新的 Telegram 机器人 token:"
+    read TELEGRAM_BOT_TOKEN
+
+    echo "请输入新的 Telegram chat ID:"
+    read TELEGRAM_CHAT_ID
+
+    # 更新配置文件
+    sed -i "s/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=\"$TELEGRAM_BOT_TOKEN\"/" "$CONFIG_FILE"
+    sed -i "s/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=\"$TELEGRAM_CHAT_ID\"/" "$CONFIG_FILE"
+
+    echo "Telegram 通知已重新配置。"
+}
+
+# 卸载 DDNS
+uninstall_ddns() {
+    echo "卸载 DDNS 脚本和配置..."
+
+    # 删除定时任务
+    (crontab -l | grep -v "$SCRIPT_PATH") | crontab -
+
+    # 删除脚本和配置文件
+    sudo rm -f $SCRIPT_PATH
+    sudo rm -f $CONFIG_FILE
+
+    echo "DDNS 更新脚本和配置已被卸载。"
+}
+
+# 安装脚本
+install_script() {
+    echo "安装 DDNS 管理脚本..."
+
+    # 保存脚本到指定路径
+    sudo tee $MANAGE_SCRIPT_PATH > /dev/null <<EOF
+#!/bin/sh
+
+# 脚本路径和配置文件
+CONFIG_FILE="/etc/ddns_config.conf"
+SCRIPT_PATH="/usr/local/bin/ddns_update.sh"
+LOG_FILE="/var/log/ddns_update.log"
+
+# 打印菜单
+print_menu() {
+    echo "作者: liziyu"
+    echo "请选择操作:"
+    echo "1. 配置 DDNS"
+    echo "2. 重启 DDNS 更新脚本"
+    echo "3. 重新配置需要解析的域名"
+    echo "4. 重新配置 Telegram 通知"
+    echo "5. 卸载 DDNS"
+    echo "6. 退出脚本"
+}
+
+# 配置信息
+configure_ddns() {
+    echo "请输入您的 Cloudflare API token:"
+    read CF_API_TOKEN
+
+    echo "请输入您的 Cloudflare 邮箱:"
+    read CF_EMAIL
+
+    echo "请输入要解析的域名 (例如 example.com):"
+    read HOSTNAME
+
+    echo "请输入您的 Telegram 机器人 token:"
+    read TELEGRAM_BOT_TOKEN
+
+    echo "请输入您的 Telegram chat ID:"
+    read TELEGRAM_CHAT_ID
+
+    # 创建配置文件
+    echo "CF_API_TOKEN=\"$CF_API_TOKEN\"" > "$CONFIG_FILE"
+    echo "CF_EMAIL=\"$CF_EMAIL\"" >> "$CONFIG_FILE"
+    echo "HOSTNAME=\"$HOSTNAME\"" >> "$CONFIG_FILE"
+    echo "TELEGRAM_BOT_TOKEN=\"$TELEGRAM_BOT_TOKEN\"" >> "$CONFIG_FILE"
+    echo "TELEGRAM_CHAT_ID=\"$TELEGRAM_CHAT_ID\"" >> "$CONFIG_FILE"
+
+    # 创建 DDNS 更新脚本
+    echo "创建 DDNS 更新脚本..."
+    sudo tee $SCRIPT_PATH > /dev/null <<EOF
+#!/bin/sh
+
+# 配置部分
+CF_API_TOKEN="$CF_API_TOKEN"
+CF_EMAIL="$CF_EMAIL"
+HOSTNAME="$HOSTNAME"
+TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+
+# 获取当前 IP 地址
+CURRENT_IP=\$(curl -s http://ipinfo.io/ip)
+
+# 获取 Zone ID 和 Record ID
+ZONE_ID=\$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=\$HOSTNAME" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+RECORD_ID=\$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records?type=A&name=\$HOSTNAME" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+# 更新 DDNS
+RESPONSE=\$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID
+
+/dns_records/\$RECORD_ID" \
+     -H "Authorization: Bearer \$CF_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data "{\"type\":\"A\",\"name\":\"\$HOSTNAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":120}")
+
+# 检查更新结果
+if echo "\$RESPONSE" | grep -q "\"success\":true"; then
+    echo "\$(date): DDNS 更新成功，IP 地址为 \$CURRENT_IP。" >> $LOG_FILE
+    
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="\$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新成功，IP 地址为 \$CURRENT_IP，时间：\$(date)。"
+else
+    echo "\$(date): DDNS 更新失败: \$RESPONSE" >> $LOG_FILE
+
+    # 发送 Telegram 通知
+    curl -s -X POST "https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/sendMessage" \
+         -d chat_id="\$TELEGRAM_CHAT_ID" \
+         -d text="DDNS 更新失败: \$RESPONSE，时间：\$(date)。"
+fi
+EOF
+
+    # 设置脚本执行权限
+    sudo chmod +x $SCRIPT_PATH
+
+    # 设置定时任务
+    echo "*/5 * * * * $SCRIPT_PATH" | (crontab -l; cat) | crontab -
+
+    echo "DDNS 更新脚本已成功配置和启动！"
+}
+
+# 重启 DDNS 脚本
+restart_ddns() {
+    echo "重启 DDNS 更新脚本..."
+    (crontab -l | grep -v "$SCRIPT_PATH") | crontab -
+    echo "*/5 * * * * $SCRIPT_PATH" | (crontab -l; cat) | crontab -
+    echo "DDNS 更新脚本已重启。"
+}
+
+# 重新配置域名
+reconfigure_hostname() {
+    echo "请输入新的要解析的域名 (例如 example.com):"
+    read HOSTNAME
+
+    # 更新配置文件
+    sed -i "s/^HOSTNAME=.*/HOSTNAME=\"$HOSTNAME\"/" "$CONFIG_FILE"
+
+    echo "域名已重新配置为 $HOSTNAME。"
+}
+
+# 重新配置 Telegram 通知
+reconfigure_telegram() {
+    echo "请输入新的 Telegram 机器人 token:"
+    read TELEGRAM_BOT_TOKEN
+
+    echo "请输入新的 Telegram chat ID:"
+    read TELEGRAM_CHAT_ID
+
+    # 更新配置文件
+    sed -i "s/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=\"$TELEGRAM_BOT_TOKEN\"/" "$CONFIG_FILE"
+    sed -i "s/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=\"$TELEGRAM_CHAT_ID\"/" "$CONFIG_FILE"
+
+    echo "Telegram 通知已重新配置。"
+}
+
+# 卸载 DDNS
+uninstall_ddns() {
+    echo "卸载 DDNS 脚本和配置..."
+
+    # 删除定时任务
+    (crontab -l | grep -v "$SCRIPT_PATH") | crontab -
+
+    # 删除脚本和配置文件
+    sudo rm -f $SCRIPT_PATH
+    sudo rm -f $CONFIG_FILE
+
+    echo "DDNS 更新脚本和配置已被卸载。"
+}
+
+# 主菜单循环
+while true; do
+    print_menu
+    read -p "请选择选项 [1-6]: " OPTION
+
+    case $OPTION in
+        1) configure_ddns ;;
+        2) restart_ddns ;;
+        3) reconfigure_hostname ;;
+        4) reconfigure_telegram ;;
+        5) uninstall_ddns ;;
+        6) exit 0 ;;
+        *) echo "无效的选项，请重新选择。" ;;
+    esac
+done
+EOF
+
+    # 赋予执行权限
+    sudo chmod +x $MANAGE_SCRIPT_PATH
+
+    # 创建命令别名
+    echo "创建命令别名..."
+    (crontab -l | grep -v "$MANAGE_SCRIPT_PATH") | crontab -
+    echo "alias ddns='$MANAGE_SCRIPT_PATH'" >> ~/.bashrc
+    source ~/.bashrc
+
+    echo "DDNS 管理脚本已安装完成。下次使用 'ddns' 命令即可唤出脚本管理界面。"
+}
+
+# 主菜单安装管理脚本
+install_script
