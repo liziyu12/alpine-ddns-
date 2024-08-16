@@ -23,7 +23,7 @@ echo "请输入 DDNS 更新的时间间隔（分钟）："
 read UPDATE_INTERVAL
 
 # 远程 DDNS 脚本的 URL
-REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/liziyu12/alpine-ddns-/main/alpineddns"
+REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/liziyu12/alpine-ddns-/724c11d8f9591a8c5e547146ac8a321ba26aa6bf/alpineddns"
 
 # 下载并执行远程 DDNS 脚本
 echo "正在下载并执行远程 DDNS 脚本..."
