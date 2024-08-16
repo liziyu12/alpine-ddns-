@@ -1,49 +1,47 @@
 #!/bin/sh
 
-# 一些配置项
-DDNS_PROVIDER_URL="https://example.com/update"  # 替换为你的DDNS服务提供商的更新URL
-USERNAME="your_username"                        # 替换为你的DDNS账号用户名
-PASSWORD="your_password"                        # 替换为你的DDNS账号密码
-HOSTNAME="your_hostname.example.com"            # 替换为你想更新的域名
-UPDATE_INTERVAL="5"                             # DDNS更新的时间间隔（分钟）
+# 提示用户输入必要信息
+echo "请输入你的 Cloudflare API token:"
+read CF_API_TOKEN
 
-# 定义脚本路径和日志文件
-SCRIPT_PATH="/usr/local/bin/ddns_update.sh"
-LOG_FILE="/var/log/ddns_update.log"
+echo "请输入你的 Cloudflare zone ID:"
+read CF_ZONE_ID
 
-# 安装必要的工具
-echo "Installing necessary tools..."
-sudo apk add curl
+echo "请输入你的 Cloudflare record ID:"
+read CF_RECORD_ID
 
-# 创建DDNS更新脚本
-echo "Creating DDNS update script at $SCRIPT_PATH..."
+echo "请输入你想更新的主机名:"
+read HOSTNAME
 
-sudo tee $SCRIPT_PATH > /dev/null <<EOF
-#!/bin/sh
+echo "请输入你的 Telegram 机器人 token:"
+read TELEGRAM_BOT_TOKEN
 
-# 获取当前IP地址
-CURRENT_IP=\$(curl -s http://ipinfo.io/ip)
+echo "请输入你的 Telegram 聊天 ID:"
+read TELEGRAM_CHAT_ID
 
-# 更新DDNS
-RESPONSE=\$(curl -s -u "$USERNAME:$PASSWORD" "$DDNS_PROVIDER_URL?hostname=$HOSTNAME&myip=\$CURRENT_IP")
+echo "请输入 DDNS 更新的时间间隔（分钟）："
+read UPDATE_INTERVAL
 
-# 检查更新结果
-if echo "\$RESPONSE" | grep -q "good"; then
-    echo "\$(date): DDNS updated successfully." >> $LOG_FILE
-else
-    echo "\$(date): DDNS update failed: \$RESPONSE" >> $LOG_FILE
-fi
-EOF
+# 远程 DDNS 脚本的 URL
+REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/liziyu12/alpine-ddns-/main/alpineddns"
 
-# 设置脚本执行权限
-echo "Setting executable permissions for $SCRIPT_PATH..."
-sudo chmod +x $SCRIPT_PATH
+# 下载并执行远程 DDNS 脚本
+echo "正在下载并执行远程 DDNS 脚本..."
+bash <(wget -qO- "$REMOTE_SCRIPT_URL")
 
-# 设置定时任务
-echo "Setting up cron job to update DDNS every $UPDATE_INTERVAL minutes..."
+# 配置远程脚本所需的信息
+echo "正在使用提供的信息配置远程脚本..."
 
-(crontab -l 2>/dev/null; echo "*/$UPDATE_INTERVAL * * * * $SCRIPT_PATH") | crontab -
+# 设置环境变量以供远程脚本使用
+export CF_API_TOKEN
+export CF_ZONE_ID
+export CF_RECORD_ID
+export HOSTNAME
+export TELEGRAM_BOT_TOKEN
+export TELEGRAM_CHAT_ID
 
-# 提示用户安装完成
-echo "DDNS update script installed and configured successfully!"
-echo "Log file: $LOG_FILE"
+# 设置定时任务，按照指定的时间间隔执行远程 DDNS 脚本
+echo "正在设置 Cron 任务以每 $UPDATE_INTERVAL 分钟运行一次远程 DDNS 脚本..."
+(crontab -l 2>/dev/null; echo "*/$UPDATE_INTERVAL * * * * bash <(wget -qO- $REMOTE_SCRIPT_URL)") | crontab -
+
+echo "设置完成！"
