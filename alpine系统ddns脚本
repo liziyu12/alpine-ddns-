@@ -1,0 +1,49 @@
+#!/bin/sh
+
+# 一些配置项
+DDNS_PROVIDER_URL="https://example.com/update"  # 替换为你的DDNS服务提供商的更新URL
+USERNAME="your_username"                        # 替换为你的DDNS账号用户名
+PASSWORD="your_password"                        # 替换为你的DDNS账号密码
+HOSTNAME="your_hostname.example.com"            # 替换为你想更新的域名
+UPDATE_INTERVAL="5"                             # DDNS更新的时间间隔（分钟）
+
+# 定义脚本路径和日志文件
+SCRIPT_PATH="/usr/local/bin/ddns_update.sh"
+LOG_FILE="/var/log/ddns_update.log"
+
+# 安装必要的工具
+echo "Installing necessary tools..."
+sudo apk add curl
+
+# 创建DDNS更新脚本
+echo "Creating DDNS update script at $SCRIPT_PATH..."
+
+sudo tee $SCRIPT_PATH > /dev/null <<EOF
+#!/bin/sh
+
+# 获取当前IP地址
+CURRENT_IP=\$(curl -s http://ipinfo.io/ip)
+
+# 更新DDNS
+RESPONSE=\$(curl -s -u "$USERNAME:$PASSWORD" "$DDNS_PROVIDER_URL?hostname=$HOSTNAME&myip=\$CURRENT_IP")
+
+# 检查更新结果
+if echo "\$RESPONSE" | grep -q "good"; then
+    echo "\$(date): DDNS updated successfully." >> $LOG_FILE
+else
+    echo "\$(date): DDNS update failed: \$RESPONSE" >> $LOG_FILE
+fi
+EOF
+
+# 设置脚本执行权限
+echo "Setting executable permissions for $SCRIPT_PATH..."
+sudo chmod +x $SCRIPT_PATH
+
+# 设置定时任务
+echo "Setting up cron job to update DDNS every $UPDATE_INTERVAL minutes..."
+
+(crontab -l 2>/dev/null; echo "*/$UPDATE_INTERVAL * * * * $SCRIPT_PATH") | crontab -
+
+# 提示用户安装完成
+echo "DDNS update script installed and configured successfully!"
+echo "Log file: $LOG_FILE"
